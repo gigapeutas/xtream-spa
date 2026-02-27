@@ -1,114 +1,78 @@
-const PROXY_ENDPOINT = "/.netlify/functions/xtream-proxy?target=";
+/*
+  Consysenci.a Xtream Service
+  - API via Netlify Function (JSON only)
+  - Stream direto do servidor (HTTP porta 80)
+*/
 
-function proxify(targetUrl) {
-  return PROXY_ENDPOINT + encodeURIComponent(targetUrl);
+function normalizeBase(serverUrl) {
+  return (serverUrl || "").trim().replace(/\/$/, "");
 }
 
-async function fetchJson(targetUrl) {
-  const res = await fetch(proxify(targetUrl), { method: "GET" });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return await res.json();
+/* ============================
+   API (LOGIN + LISTAS JSON)
+   ============================ */
+
+export function buildApiUrl(serverUrl, user, pass) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
 }
 
-export async function login(serverUrl, username, password) {
-  const url = `${serverUrl.replace(/\/$/, "")}/player_api.php?username=${encodeURIComponent(
-    username
-  )}&password=${encodeURIComponent(password)}`;
-
-  const data = await fetchJson(url);
-
-  const auth = data?.user_info?.auth;
-  if (auth !== 1 && auth !== "1") {
-    throw new Error("Credenciais inválidas ou auth falhou.");
-  }
-
-  return {
-    raw: data,
-    serverUrl: serverUrl.replace(/\/$/, ""),
-    username,
-    password
-  };
+export function buildLiveCategoriesUrl(serverUrl, user, pass) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_categories`;
 }
 
-export async function getCatalog(session) {
-  const { serverUrl, username, password } = session;
-
-  const base = `${serverUrl}/player_api.php?username=${encodeURIComponent(
-    username
-  )}&password=${encodeURIComponent(password)}`;
-
-  const [liveCategories, vodCategories, seriesCategories] = await Promise.all([
-    fetchJson(`${base}&action=get_live_categories`).catch(() => []),
-    fetchJson(`${base}&action=get_vod_categories`).catch(() => []),
-    fetchJson(`${base}&action=get_series_categories`).catch(() => [])
-  ]);
-
-  return {
-    liveCategories: Array.isArray(liveCategories) ? liveCategories : [],
-    vodCategories: Array.isArray(vodCategories) ? vodCategories : [],
-    seriesCategories: Array.isArray(seriesCategories) ? seriesCategories : []
-  };
+export function buildLiveStreamsUrl(serverUrl, user, pass, categoryId) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_streams&category_id=${categoryId}`;
 }
 
-export async function getItemsByType(session, type, categoryId) {
-  const { serverUrl, username, password } = session;
-
-  const base = `${serverUrl}/player_api.php?username=${encodeURIComponent(
-    username
-  )}&password=${encodeURIComponent(password)}`;
-
-  if (type === "live") {
-    const url = categoryId
-      ? `${base}&action=get_live_streams&category_id=${encodeURIComponent(categoryId)}`
-      : `${base}&action=get_live_streams`;
-    const data = await fetchJson(url);
-    return Array.isArray(data) ? data : [];
-  }
-
-  if (type === "vod") {
-    const url = categoryId
-      ? `${base}&action=get_vod_streams&category_id=${encodeURIComponent(categoryId)}`
-      : `${base}&action=get_vod_streams`;
-    const data = await fetchJson(url);
-    return Array.isArray(data) ? data : [];
-  }
-
-  if (type === "series") {
-    const url = categoryId
-      ? `${base}&action=get_series&category_id=${encodeURIComponent(categoryId)}`
-      : `${base}&action=get_series`;
-    const data = await fetchJson(url);
-    return Array.isArray(data) ? data : [];
-  }
-
-  return [];
+export function buildVodCategoriesUrl(serverUrl, user, pass) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_vod_categories`;
 }
 
-export function buildPlaybackUrl(session, item, type) {
-  const { serverUrl, username, password } = session;
+export function buildVodStreamsUrl(serverUrl, user, pass, categoryId) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_vod_streams&category_id=${categoryId}`;
+}
 
-  const s = serverUrl.replace(/\/$/, "");
-  const u = encodeURIComponent(username);
-  const p = encodeURIComponent(password);
+/*
+  Usa Netlify Function SOMENTE para API JSON
+  Exemplo de uso:
+  const url = proxifyApi(buildApiUrl(...))
+*/
+export function proxifyApi(targetUrl) {
+  const origin = window.location.origin.replace(/\/$/, "");
+  return `${origin}/.netlify/functions/xtream-proxy?target=${encodeURIComponent(targetUrl)}`;
+}
 
-  if (type === "live") {
-    const id = item?.stream_id ?? item?.id;
-    return `${s}/live/${u}/${p}/${id}.m3u8`;
-  }
+/* ============================
+   STREAMS (DIRETO DO SERVIDOR)
+   ============================ */
 
-  if (type === "vod") {
-    const id = item?.stream_id ?? item?.id;
-    const ext = item?.container_extension || "mp4";
-    return `${s}/movie/${u}/${p}/${id}.${ext}`;
-  }
+/*
+  LIVE → sempre .m3u8
+  Exemplo:
+  http://playtvstreaming.shop/live/USER/PASS/12345.m3u8
+*/
+export function buildLiveStreamUrl(serverUrl, user, pass, streamId) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${streamId}.m3u8`;
+}
 
-  if (type === "series") {
-    const id = item?.series_id ?? item?.id;
-    return `${s}/series/${u}/${p}/${id}.m3u8`;
-  }
+/*
+  VOD → geralmente .mp4
+*/
+export function buildVodStreamUrl(serverUrl, user, pass, streamId) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/movie/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${streamId}.mp4`;
+}
 
-  return "";
+/*
+  SERIES → geralmente .mp4
+*/
+export function buildSeriesStreamUrl(serverUrl, user, pass, streamId) {
+  const base = normalizeBase(serverUrl);
+  return `${base}/series/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${streamId}.mp4`;
 }

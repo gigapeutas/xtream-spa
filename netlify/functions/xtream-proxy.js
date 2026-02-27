@@ -1,70 +1,75 @@
-export default async (request) => {
+export default async (req) => {
   try {
-    const url = new URL(request.url);
+    const url = new URL(req.url);
     const target = url.searchParams.get("target");
-
-    if (!target) {
-      return new Response(JSON.stringify({ error: "Missing ?target=" }), {
-        status: 400,
-        headers: jsonHeaders(),
-      });
-    }
+    if (!target) return json(400, { error: "Missing ?target=" });
 
     const targetUrl = safeParseUrl(target);
-    if (!targetUrl) {
-      return new Response(JSON.stringify({ error: "Invalid target URL" }), {
-        status: 400,
-        headers: jsonHeaders(),
-      });
-    }
+    if (!targetUrl) return json(400, { error: "Invalid target URL" });
 
-    if (!["http:", "https:"].includes(targetUrl.protocol)) {
-      return new Response(JSON.stringify({ error: "Only http/https allowed" }), {
-        status: 400,
-        headers: jsonHeaders(),
-      });
+    // ✅ Proxy APENAS para JSON (player_api.php e endpoints get_*)
+    const path = (targetUrl.pathname || "").toLowerCase();
+
+    // Bloqueia QUALQUER coisa que pareça stream/arquivo de mídia
+    if (
+      path.endsWith(".m3u8") ||
+      path.endsWith(".ts") ||
+      path.endsWith(".mp4") ||
+      path.includes("/live/") ||
+      path.includes("/movie/") ||
+      path.includes("/series/")
+    ) {
+      return json(403, { error: "API proxy is JSON-only. Video must be loaded directly by the player." });
     }
 
     const upstream = await fetch(targetUrl.toString(), {
       method: "GET",
-      headers: { "User-Agent": "xtream-spa-proxy/3.0" },
+      headers: {
+        "User-Agent": "consysencia-api-proxy/1.0",
+        "Accept": "application/json,*/*",
+      },
     });
 
-    const contentType =
-      upstream.headers.get("content-type") || "application/json";
+    const text = await upstream.text();
 
-    const data = await upstream.arrayBuffer();
+    // Normaliza para JSON sempre (se não vier JSON válido, embrulha)
+    let body;
+    try {
+      body = JSON.stringify(JSON.parse(text));
+    } catch {
+      body = JSON.stringify({ raw: text });
+    }
 
-    return new Response(data, {
+    return new Response(body, {
       status: upstream.status,
       headers: {
-        "Content-Type": contentType,
+        "Content-Type": "application/json; charset=utf-8",
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
         "Cache-Control": "no-store",
       },
     });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: "Proxy error", detail: String(err) }),
-      { status: 500, headers: jsonHeaders() }
-    );
+    return json(500, { error: "Proxy error", detail: String(err?.message || err) });
   }
 };
 
+function json(status, obj) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 function safeParseUrl(maybeUrl) {
   try {
-    return new URL(maybeUrl);
+    const u = new URL(maybeUrl);
+    if (!["http:", "https:"].includes(u.protocol)) return null;
+    return u;
   } catch {
     return null;
   }
-}
-
-function jsonHeaders() {
-  return {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": "no-store",
-  };
 }
